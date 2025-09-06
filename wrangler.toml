@@ -1,4 +1,4 @@
-name = "lottery-fetch-worker"
+name = "api-worker"
 main = "index.js"
 compatibility_date = "2025-08-28"
 
