@@ -1,93 +1,75 @@
 export default {
   async scheduled(event, env, ctx) {
-    const apiUrlBase = "https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json?ts=";
+    const apiUrl = "https://draw.ar-lottery01.com/WinGo/WinGo_1M/GetHistoryIssuePage.json?ts=" + Date.now();
     const firebaseUrl = "https://web-admin-e297c-default-rtdb.asia-southeast1.firebasedatabase.app/results.json";
 
-    function getTimestamps() {
-      const now = new Date();
-      const utcTime = now.toISOString();
-      const istTime = new Date(now.getTime() + 5.5 * 60 * 60 * 1000).toISOString();
-      return { utc: utcTime, ist: istTime };
-    }
+    try {
+      // 1. Fetch API Data
+      const response = await fetch(apiUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0",
+          "Accept": "application/json"
+        }
+      });
 
-    async function fetchAndUpdate() {
-      const apiUrl = apiUrlBase + Date.now();
-      try {
-        const response = await fetch(apiUrl, {
-          headers: {
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "application/json"
-          }
+      if (!response.ok) {
+        console.error("❌ API Fetch Failed:", response.status);
+        return new Response("API Fetch Error", { status: response.status });
+      }
+
+      const data = await response.json();
+      console.log("✅ API Response:", JSON.stringify(data));
+
+      const results = data?.data?.list || [];
+      console.log("✅ Total Results Fetched:", results.length);
+
+      if (results.length === 0) {
+        console.log("⚠ No data found in API response");
+        return new Response("No data", { status: 200 });
+      }
+
+      // 2. Get existing results from Firebase
+      const existingRes = await fetch(firebaseUrl);
+      const existingData = await existingRes.json() || {};
+      console.log("✅ Existing Firebase Entries:", Object.keys(existingData).length);
+
+      // 3. Prepare new entries
+      const updates = {};
+      for (const item of results) {
+        const period = item.issueNumber;
+        if (!existingData[period]) { // Avoid duplicates
+          const size = parseInt(item.number) <= 4 ? "Small" : "Big";
+
+          updates[period] = {
+            period,
+            result: size,
+            number: item.number,
+            color: item.color
+          };
+        }
+      }
+
+      console.log("✅ New Entries to Add:", Object.keys(updates).length);
+
+      // 4. Push new data to Firebase if available
+      if (Object.keys(updates).length > 0) {
+        const fbRes = await fetch(firebaseUrl, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(updates)
         });
 
-        if (!response.ok) {
-          console.error("❌ API Fetch Failed:", response.status);
-          return false;
-        }
-
-        const data = await response.json();
-        const results = data?.data?.list || [];
-
-        if (results.length === 0) {
-          console.log("⚠ No data found in API response");
-          return false;
-        }
-
-        // Get existing data from Firebase
-        const existingRes = await fetch(firebaseUrl);
-        const existingData = await existingRes.json() || {};
-
-        const updates = {};
-        let newDataFound = false;
-
-        for (const item of results) {
-          const period = item.issueNumber;
-          if (!existingData[period]) {
-            newDataFound = true;
-            const size = parseInt(item.number) <= 4 ? "Small" : "Big";
-            const { utc, ist } = getTimestamps();
-            updates[period] = {
-              period,
-              result: size,
-              number: item.number,
-              color: item.color,
-              savedAtUTC: utc,
-              savedAtIST: ist
-            };
-          }
-        }
-
-        if (Object.keys(updates).length > 0) {
-          await fetch(firebaseUrl, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(updates)
-          });
-          console.log("✅ Saved new data:", Object.keys(updates));
-        }
-
-        return newDataFound;
-      } catch (err) {
-        console.error("❌ Error in fetchAndUpdate:", err);
-        return false;
+        const fbText = await fbRes.text();
+        console.log("✅ Firebase Response:", fbText);
+      } else {
+        console.log("ℹ No new data to update.");
       }
+
+      return new Response("Data synced successfully", { status: 200 });
+
+    } catch (err) {
+      console.error("❌ Error Occurred:", err);
+      return new Response("Error: " + err.message, { status: 500 });
     }
-
-    // Main logic: Retry every 4 sec for 40 sec (max 10 attempts)
-    ctx.waitUntil((async () => {
-      for (let attempt = 1; attempt <= 10; attempt++) {
-        console.log(`⏳ Attempt ${attempt}`);
-        const found = await fetchAndUpdate();
-        if (found) {
-          console.log("✅ New data found, stopping retries.");
-          break;
-        }
-        if (attempt < 10) {
-          await new Promise(res => setTimeout(res, 4000)); // wait 4 sec
-        }
-      }
-    })());
-
-    return new Response("Retry job started", { status: 200 });
   }
 };
